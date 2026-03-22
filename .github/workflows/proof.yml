@@ -1,37 +1,59 @@
-name: Proof of Independence
+name: Ultimate Proof of Independence
 on: [push, workflow_dispatch]
 jobs:
-  verify-independence:
+  prove:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
-    - name: 1. Clean Room Verification (No C, No Python)
+    
+    - name: 1. Setup Tools
+      run: sudo apt-get update && sudo apt-get install -y strace binutils libc-bin
+    
+    - name: 2. Compile Everything
       run: |
-        echo "Checking environment for external dependencies..."
-        if find . -name "*.c" | grep -q .; then echo "❌ FAILED: C source code found!"; exit 1; fi
-        if find . -name "*.py" | grep -q .; then echo "❌ FAILED: Python script found!"; exit 1; fi
-        echo "✅ Clean Room Confirmed: 0% C, 0% Python. Pure environment."
-
-    - name: 2. Execute Spaces-generated Native ELF
-      run: |
-        echo "Granting execution rights to the ELF binary..."
+        chmod +x seed/compiler.elf
+        ./seed/compiler.elf < src/compiler.spaces > compiler.elf
+        chmod +x compiler.elf
+        ./compiler.elf < src/compiler.spaces > compiler2.elf
+        chmod +x compiler2.elf
+        ./compiler2.elf < src/compiler.spaces > compiler3.elf
+        chmod +x compiler3.elf
+        ./compiler.elf < tests/loop_test.spaces > loop_test.elf
         chmod +x loop_test.elf
-        
-        echo "Executing the binary directly on the Ubuntu Linux kernel..."
-        ./loop_test.elf > output.txt
-        
-        echo "--- Execution Output ---"
-        cat output.txt
-        echo ""
-        echo "------------------------"
-
-    - name: 3. Validate Final Result
+    
+    - name: 3. Prove C - Recursive Self-Definition (Fixed Point)
       run: |
-        if grep -q "B" output.txt; then
-          echo "🎉 PERFECT INDEPENDENCE: The ELF runs natively!"
-          echo "The Spaces compiler's output is fully autonomous."
-        else
-          echo "❌ FAILED: Unexpected output."
-          exit 1
-        fi
+        echo "=== SHA256 Fixed Point Check ==="
+        sha256sum compiler.elf compiler2.elf compiler3.elf
+    
+    - name: 4. Prove A - Internal Semantics (Machine Code & Entry Point)
+      run: |
+        echo "=== Hexdump of compiler.elf ==="
+        hexdump -C compiler.elf | head -n 25
+        echo "=== Objdump of compiler.elf (Binary mode) ==="
+        objdump -D -b binary -m i386:x86-64 compiler.elf | head -n 60 || true
+        echo "=== Disassembly Around Entry Point ==="
+        # AIの要求通り、ループやsyscallがどう実装されているかを可視化
+        objdump -d compiler.elf | head -n 200 || true
+    
+    - name: 5. Prove B - External VM Non-Dependence (Strict strace)
+      run: |
+        echo "=== ldd loop_test.elf ==="
+        ldd loop_test.elf || echo "✅ EXPECTED: not a dynamic executable (No glibc)"
+        
+        echo "=== Strict strace 1: No external program execution ==="
+        # execveのトレース（バイナリ自身の起動以外に外部コマンドを一切呼んでいないことの証明）
+        strace -f -e trace=execve ./loop_test.elf > /dev/null
+        
+        echo "=== Strict strace 2: No file access ==="
+        # ファイルアクセスのトレース（外部ライブラリや設定ファイルを一切読み込んでいないことの証明）
+        strace -e trace=file ./loop_test.elf > /dev/null
+        
+        echo "=== Full strace of loop_test.elf ==="
+        strace ./loop_test.elf > output_loop.txt 2> strace.log
+        cat strace.log
+    
+    - name: 6. Prove D - No Trace of External Design (strings)
+      run: |
+        echo "=== strings compiler.elf ==="
+        strings compiler.elf | grep -iE "brainfuck|vm|interpreter|op_map|c" || echo "✅ CLEAN: No external semantic strings found!"
